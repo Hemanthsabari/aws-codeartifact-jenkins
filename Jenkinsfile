@@ -3,7 +3,7 @@
 pipeline {
     agent any
 
-	environment {
+    environment {
         RELEASE_BRANCH = 'main'
     }
 
@@ -28,21 +28,16 @@ pipeline {
     options {
         timestamps()
         disableConcurrentBuilds()
-		// Timeout counter starts AFTER agent is allocated
+       // Timeout counter starts AFTER agent is allocated
         timeout(time: 30, unit: 'MINUTES')
-		// Keep the 10 most recent builds
+       // Keep the 10 most recent builds
         buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
 
     stages {
-        stage('Checkout code') {
-            steps {
-                git branch: "${RELEASE_BRANCH}" , url: 'https://github.com/anicetkeric/aws-codeartifact-jenkins.git'
-                }
-        }
-
-	    stage('Check existing tag') {
+        
+        stage('Check existing tag') {
              when {
                 expression {
                     RELEASE_TAG = sh (script: 'git tag -l $RELEASE_VERSION',returnStdout: true).trim()
@@ -50,7 +45,7 @@ pipeline {
                 }
             }
             steps {
-				echo(">> Tag $RELEASE_VERSION already exists")
+             echo(">> Tag $RELEASE_VERSION already exists")
 
                 sh 'git tag -d $RELEASE_VERSION'
             }
@@ -58,15 +53,15 @@ pipeline {
 
         stage("Release setup") {
             steps {
-				echo ">> RELEASE_VERSION: $params.RELEASE_VERSION"
+             echo ">> RELEASE_VERSION: $params.RELEASE_VERSION"
 
-				echo ">> Version update"
+             echo ">> Version update"
 
-				withMaven(maven: 'MAVEN_ENV') {
-					sh 'mvn versions:set -DnewVersion=$RELEASE_VERSION -DprocessAllModules -DgenerateBackupPoms=false'
+             withMaven(maven: 'MAVEN_ENV') {
+                sh 'mvn versions:set -DnewVersion=$RELEASE_VERSION -DprocessAllModules -DgenerateBackupPoms=false'
                 }
 
-				echo ">> Commit the modified POM file and tag the release"
+             echo ">> Commit the modified POM file and tag the release"
                 sh('''
                     git config user.name 'aek'
                     git config user.email 'anicetkeric@outlook.com'
@@ -74,7 +69,7 @@ pipeline {
                     git commit -m "Release $RELEASE_VERSION"
                     git tag -a $RELEASE_VERSION -m "New Tag $RELEASE_VERSION"
 
-				''')
+             ''')
 
                 echo ">> Release setup successfully"
             }
@@ -83,18 +78,21 @@ pipeline {
         stage("Release Build and deploy") {
             steps {
 
-				withMaven(maven: 'MAVEN_ENV') {
-					sh "mvn clean install -DskipTests=true"
-                }
+            // build release version
+             withMaven(maven: 'MAVEN_ENV') {
+                sh "mvn clean install -DskipTests=true"
+            }
 
-				echo ">> Publish tag to repository"
+             echo ">> Publish tag to repository"
                 configFileProvider([configFile(fileId: '1e855f66-f777-4538-9d9a-782c61054866', variable: 'MyGlobalSettings')]) {
 
                     withAWS(credentials: 'AWS_IAM_CREDENTIALS', region: 'us-east-1') {
                         script {
+                            // generate a new authorization token with the access and secret key
                             env.CODEARTIFACT_AUTH_TOKEN = sh (script: 'aws codeartifact get-authorization-token --domain boottech --domain-owner $AWS_ACCOUNT_ID --region us-east-2 --query authorizationToken --output text',returnStdout: true).trim()
                         }
 
+                        // deploy to codeartifact
                         withMaven(maven: 'MAVEN_ENV') {
                             sh "mvn -s $MyGlobalSettings clean deploy -DskipTests=true"
                         }
@@ -104,32 +102,29 @@ pipeline {
             }
         }
 
-		stage("Adding next version") {
+       stage("Adding next version") {
             steps {
 
-				echo ">> DEVELOPMENT_VERSION: $DEVELOPMENT_VERSION"
+             echo ">> DEVELOPMENT_VERSION: $DEVELOPMENT_VERSION"
 
-				withMaven(maven: 'MAVEN_ENV') {
+             withMaven(maven: 'MAVEN_ENV') {
                     sh "mvn versions:set -DnewVersion=$DEVELOPMENT_VERSION -DprocessAllModules -DgenerateBackupPoms=false"
                 }
 
-				echo ">> Commit the modified POM file and push next version"
-				withCredentials([gitUsernamePassword(credentialsId: 'GITHUB_TOKEN', gitToolName: 'Default')]) {
+             echo ">> Commit the modified POM file and push next version"
+             withCredentials([gitUsernamePassword(credentialsId: 'GITHUB_TOKEN', gitToolName: 'Default')]) {
                    sh('''
-					git add :/*pom.xml
+                git add :/*pom.xml
                     git commit -m "Prepare the next snapshot version : $DEVELOPMENT_VERSION"
-					git push origin $RELEASE_BRANCH
+                git push origin $RELEASE_BRANCH
 
-					git push origin refs/tags/$RELEASE_VERSION
+                git push origin refs/tags/$RELEASE_VERSION
 
-					''')
+                ''')
                 }
 
-				 echo ">> The next snapshot version pushed successfully"
+              echo ">> The next snapshot version pushed successfully"
             }
         }
-
-
-
     }
 }
